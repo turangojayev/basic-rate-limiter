@@ -8,6 +8,8 @@ from monitoring.service_monitor import (
     OnDemandLeakyBucketRateLimiter,
     ServiceMonitor,
     get_rate_limiter_for,
+    StatusCodes,
+    RateError,
 )
 
 
@@ -83,11 +85,11 @@ class TestServiceMonitor(unittest.IsolatedAsyncioTestCase):
         monitor = ServiceMonitor()
         monitor.register_code_for_url(
             "foo",
-            429,
+            StatusCodes.proxy,
             get_rate_limiter_for("strict", 2, 1)
         )
-        await monitor.process("foo", 429)
-        await monitor.process("foo", 429)
-        with self.assertRaises(ValueError) as ctx:
-            await monitor.process("foo", 429)
-        self.assertIn("Allowed limit (2)", str(ctx.exception))
+        await monitor.process("foo", StatusCodes.proxy)
+        await monitor.process("foo", StatusCodes.proxy)
+        with self.assertRaises(RateError) as ctx:
+            await monitor.process("foo", StatusCodes.proxy)
+        self.assertIn("Fatal. Too many proxy errors", str(ctx.exception))

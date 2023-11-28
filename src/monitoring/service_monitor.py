@@ -1,4 +1,5 @@
 import asyncio
+import enum
 import logging
 import math
 import time
@@ -77,6 +78,23 @@ mode2rate_limiter_class = {
 }
 
 
+class StatusCodes(enum.Enum):
+    proxy = 429
+    application = 500
+    ok = 200
+
+
+code2error = {e.value: e for e in StatusCodes}
+
+
+class RateError(Exception):
+    def __init__(self, status_code: StatusCodes):
+        self.status_code = status_code
+
+    def __str__(self):
+        return f"Fatal. Too many {self.status_code.name} errors"
+
+
 def get_rate_limiter_for(mode, rate_limit, window_size):
     if mode not in mode2rate_limiter_class:
         raise ValueError(
@@ -90,26 +108,26 @@ class StatusCodeLimiters:
     def __init__(self):
         self.status_code2rate_limiter: dict[int, RateLimiter] = {}
 
-    def register_limiter_for_code(self, code: int, rate_limiter: RateLimiter):
+    def register_limiter_for_code(self, code: StatusCodes, rate_limiter: RateLimiter):
         # potentially could also check for existing limiter for given code to avoid overwriting
-        self.status_code2rate_limiter[code] = rate_limiter
+        self.status_code2rate_limiter[code.value] = rate_limiter
 
-    def rate_limiter_for(self, code):
-        return self.status_code2rate_limiter.get(code)
+    def rate_limiter_for(self, status_code: StatusCodes):
+        return self.status_code2rate_limiter.get(status_code.value)
 
 
 class ServiceMonitor:
     def __init__(self):
         self.url2status_code_limiters: dict[str, StatusCodeLimiters] = {}
 
-    def register_code_for_url(self, url, code, rate_limiter: RateLimiter):
+    def register_code_for_url(self, url, status_code: StatusCodes, rate_limiter: RateLimiter):
         if url not in self.url2status_code_limiters:
             self.url2status_code_limiters[url] = StatusCodeLimiters()
         status_code_limiters = self.url2status_code_limiters[url]
-        status_code_limiters.register_limiter_for_code(code, rate_limiter)
+        status_code_limiters.register_limiter_for_code(status_code, rate_limiter)
 
-    async def process(self, url, status_code):
-        logger.info(f"Request to {url} is being processed, status code = {status_code}")
+    async def process(self, url, status_code: StatusCodes):
+        logger.info(f"Request to {url} is being processed, status code = {status_code.value}")
         error_rate_limiters = self.url2status_code_limiters.get(url)
         if not error_rate_limiters:
             return
@@ -119,6 +137,4 @@ class ServiceMonitor:
             return
 
         if not await rate_limiter.acquire():
-            raise ValueError(
-                f"Allowed limit ({rate_limiter.rate_limit}) of calls with response code {status_code} from {url} has been reached"
-            )
+            raise RateError(status_code)
